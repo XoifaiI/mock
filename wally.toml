@@ -1,0 +1,9 @@
+[package]
+name = "xoifaii/mock"
+version = "1.0.0"
+registry = "https://github.com/UpliftGames/wally-index"
+realm = "shared"
+license = "MIT"
+authors = ["XoifaiI"]
+description = "In-memory DataStoreService and MemoryStoreService for Roblox that keep the real services' limits."
+exclude = ["Mock.rbxm", "**/.git/**", ".github", ".github/**"]
