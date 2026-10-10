@@ -6,11 +6,11 @@
 	back exactly as it went in. A real map quietly mangles a buffer, a mixed table, a sparse array and NaN,
 	so the mock refuses them rather than hide the bug.
 
-	Items expire on the host's clock. UpdateAsync gives up its turn between its read and its write, so two
+	Items expire by os.time. UpdateAsync gives up its turn between its read and its write, so two
 	writes on one key can meet; the transform then runs again. An item's WriteNumber is how the meeting
 	is noticed. A transform that yields or throws raises, and nothing is written.
 
-	It spends its units and memory through the Host its service gives it, and reads the time there.
+	It spends its units and memory through the Host its service gives it.
 
 	Return type: The HashMap class.
 	Example usage:
@@ -23,8 +23,6 @@ local NoYield = require("./NoYield")
 local Storable = require("./Storable")
 
 export type Host = {
-	read Now: () -> number,
-	read Wait: (Seconds: number) -> (),
 	read SpendUnits: (Cost: number) -> (),
 	read ReserveMemory: (Bytes: number) -> (),
 	read AddMemory: (Bytes: number) -> (),
@@ -146,7 +144,7 @@ export type HashMap = setmetatable<HashMapData, typeof(HashMap)>
 
 local function SpendUnits(Map: HashMap, Cost: number): ()
 	Map.Host.SpendUnits(Cost)
-	Map.Host.Wait(0)
+	task.wait(0)
 end
 
 local function RemoveItem(Map: HashMap, Key: string, Item: Item): ()
@@ -160,7 +158,7 @@ local function LiveItem(Map: HashMap, Key: string): Item?
 		return nil
 	end
 
-	if Map.Host.Now() >= Item.ExpiresAt then
+	if os.time() >= Item.ExpiresAt then
 		RemoveItem(Map, Key, Item)
 		return nil
 	end
@@ -181,7 +179,7 @@ local function WriteItem(Map: HashMap, Key: string, Value: any, Expiry: number):
 	Map.Writes += 1
 	Map.Items[Key] = {
 		Text = Text,
-		ExpiresAt = Map.Host.Now() + Expiry,
+		ExpiresAt = os.time() + Expiry,
 		WriteNumber = Map.Writes,
 	}
 	Map.Host.AddMemory(MemoryOf(Key, Text))
@@ -207,7 +205,7 @@ function HashMap.New(Name: string, Host: Host): HashMap
 end
 
 function HashMap.RemoveExpired(self: HashMap): ()
-	local Now = self.Host.Now()
+	local Now = os.time()
 	for Key, Item in self.Items do
 		if Now >= Item.ExpiresAt then
 			RemoveItem(self, Key, Item)
@@ -245,7 +243,7 @@ function HashMap.UpdateAsync(self: HashMap, Key: string, Transform: Transform, E
 		local Read = LiveItem(self, Key)
 		local ReadWriteNumber = WriteNumberOf(Read)
 		local Current = if Read ~= nil then Decode(Read.Text) else nil
-		self.Host.Wait(0)
+		task.wait(0)
 
 		local Ran, Result = NoYield.Try(Transform, Current)
 		if not Ran then

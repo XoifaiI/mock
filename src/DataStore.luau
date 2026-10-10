@@ -12,7 +12,7 @@
 	excludes removed keys ends a page after KeysScannedPerPage keys, as a real one does, so a page can come
 	back short or empty while more follow.
 
-	It spends its budgets through the Host its service gives it, and reads the time there.
+	It spends its budgets through the Host its service gives it.
 
 	Return type: The DataStore class.
 	Example usage:
@@ -28,8 +28,6 @@ local Pages = require("./Pages")
 type Pages = Pages.Pages
 
 export type Host = {
-	read Now: () -> number,
-	read Wait: (Seconds: number) -> (),
 	read SpendRequest: (Kind: Enum.DataStoreRequestType) -> (),
 	read SpendKeyBytes: (Direction: "Read" | "Write", Key: string, Bytes: number) -> (),
 	read CountConflict: () -> (),
@@ -225,7 +223,7 @@ export type DataStore = setmetatable<DataStoreData, typeof(DataStore)>
 
 local function SpendRequest(Store: DataStore, Kind: Enum.DataStoreRequestType): ()
 	Store.Host.SpendRequest(Kind)
-	Store.Host.Wait(0)
+	task.wait(0)
 end
 
 local function RecordFor(Store: DataStore, Key: string): KeyRecord
@@ -256,7 +254,7 @@ local function AddVersion(Store: DataStore, Key: string, Text: string?, IsDelete
 	local Record = RecordFor(Store, Key)
 	Store.Writes += 1
 
-	local WrittenAt = Store.Host.Now()
+	local WrittenAt = os.time()
 	local Previous = NewestVersion(Record)
 	local EarliestCreatedTime = if Previous ~= nil then Previous.CreatedTime + 1 else 0
 	local Fresh: KeptVersion = {
@@ -307,7 +305,7 @@ end
 
 local function ListedKeys(Store: DataStore, Prefix: string): { string }
 	local SortedKeys = Store.SortedKeys
-	local KeepFrom = Store.Host.Now() - DataStoreLimits.VersionKeepSeconds
+	local KeepFrom = os.time() - DataStoreLimits.VersionKeepSeconds
 
 	local Listed: { string } = {}
 	for Index = FirstIndexNotBelow(SortedKeys, Prefix), #SortedKeys do
@@ -396,7 +394,7 @@ function DataStore.UpdateAsync(self: DataStore, Key: string, Transform: Transfor
 		local ReadVersionName = NewestVersionName(self.Records[Key])
 
 		local Current, Info = ReadLatest(self, Key)
-		self.Host.Wait(0)
+		task.wait(0)
 
 		local Ran, Result = NoYield.Try(Transform, Current, Info)
 		if not Ran then

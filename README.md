@@ -34,12 +34,6 @@ like two servers on one experience.
 | `CCU` | `Players` | Players across the experience. The experience's budget and MemoryStore quotas grow with it. |
 | `Throttled` | `true` | `false` turns every budget, quota and byte limit off. |
 
-### A clock of your own
-
-`Mock.New(Options, Scheduler)` takes a scheduler, `{ Now: () -> number, Wait: (Seconds) -> () }`.
-Budgets refill, versions expire and MemoryStore items expire on its clock, so a test that controls the
-clock can skip a minute without waiting one. Without one, the mock uses `os.time` and `task.wait`.
-
 ## What it supports
 
 **Data stores** (`Service:GetDataStore(Name, Scope?)`): `GetAsync`, `SetAsync`, `UpdateAsync`,

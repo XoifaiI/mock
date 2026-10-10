@@ -6,9 +6,8 @@
 	methods. It owns this server's data store request budget, the experience's MemoryStore units and the
 	memory its maps hold.
 
-	Every budget is a token bucket that refills against the scheduler's clock, so a test that owns its
-	clock owns the refill. A data store request short of budget waits in a queue, and fails once MaxQueued
-	are waiting. A MemoryStore request short of units, or a write past the memory quota, fails at once.
+	Every budget is a token bucket that refills by os.time. A data store request short of budget waits
+	in a queue, and fails once MaxQueued are waiting. A MemoryStore request short of units, or a write past the memory quota, fails at once.
 	With Throttled false no limit applies, and only the counters move.
 
 	Queued, Conflicts, Units, UnitsByMap, Calls, Bytes and PeakBytes are counters for tests to read;
@@ -17,7 +16,7 @@
 	Return type: The Service class.
 	Example usage:
 		local Service = require("./Service")
-		local Mock = Service.New({ Players = 20 }, nil)
+		local Mock = Service.New({ Players = 20 })
 		local Store = Mock:GetDataStore("PlayerData")
 --]=]
 
@@ -36,18 +35,12 @@ export type Options = {
 	Throttled: boolean?,
 }
 
-export type Scheduler = {
-	read Now: () -> number,
-	read Wait: (Seconds: number) -> (),
-}
-
 type TokenBucket = {
 	read Id: string,
 	read Cap: number,
 }
 
 type ServiceData = {
-	Scheduler: Scheduler,
 	Stores: { [string]: DataStore },
 	Maps: { [string]: HashMap },
 	Tokens: { [string]: number },
@@ -66,15 +59,6 @@ type ServiceData = {
 }
 
 local EXPERIENCE_UNITS_BUCKET = "m\0units"
-
-local REAL_SCHEDULER: Scheduler = table.freeze({
-	Now = function(): number
-		return os.time()
-	end,
-	Wait = function(Seconds: number): ()
-		task.wait(Seconds)
-	end,
-})
 
 local function CheckStoreName(Name: string): ()
 	if type(Name) ~= "string" or #Name == 0 then
@@ -124,7 +108,7 @@ local function RequestBuckets(Mock: Service, Kind: Enum.DataStoreRequestType): {
 end
 
 local function Refill(Mock: Service, Id: string, Cap: number): number
-	local Now = Mock.Scheduler.Now()
+	local Now = os.time()
 	local Held = math.min(Cap, Mock.Tokens[Id] or Cap)
 	local Elapsed = Now - (Mock.RefilledAt[Id] or Now)
 
@@ -165,7 +149,7 @@ local function WaitForBudget(Mock: Service, Buckets: { TokenBucket }, Cost: numb
 
 	Mock.Queued += 1
 	while not CanAfford(Mock, Buckets, Cost) do
-		Mock.Scheduler.Wait(DataStoreLimits.QueuePollSeconds)
+		task.wait(DataStoreLimits.QueuePollSeconds)
 	end
 	Mock.Queued -= 1
 	assert(Mock.Queued >= 0, "the mock let more requests off its queue than it ever put on")
@@ -246,8 +230,6 @@ end
 
 local function StoreHost(Mock: Service, Name: string): DataStore.Host
 	return table.freeze({
-		Now = Mock.Scheduler.Now,
-		Wait = Mock.Scheduler.Wait,
 		SpendRequest = function(Kind: Enum.DataStoreRequestType): ()
 			SpendRequest(Mock, Kind)
 		end,
@@ -262,8 +244,6 @@ end
 
 local function MapHost(Mock: Service, Name: string): HashMap.Host
 	return table.freeze({
-		Now = Mock.Scheduler.Now,
-		Wait = Mock.Scheduler.Wait,
 		SpendUnits = function(Cost: number): ()
 			SpendUnits(Mock, Name, Cost)
 		end,
@@ -279,12 +259,11 @@ local function MapHost(Mock: Service, Name: string): HashMap.Host
 	})
 end
 
-function Service.New(Options: Options?, Scheduler: Scheduler?): Service
+function Service.New(Options: Options?): Service
 	local Given: Options = Options or {}
 	local Players = Given.Players or 0
 
 	local Data: ServiceData = {
-		Scheduler = Scheduler or REAL_SCHEDULER,
 		Stores = {},
 		Maps = {},
 		Tokens = {},
