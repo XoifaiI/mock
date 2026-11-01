@@ -6,9 +6,11 @@
 	methods. It owns this server's data store request budget, the experience's MemoryStore units and the
 	memory its maps hold.
 
-	Every budget is a token bucket that refills by os.time. A data store request short of budget waits
-	in a queue, and fails once MaxQueued are waiting. A MemoryStore request short of units, or a write past the memory quota, fails at once.
-	With Throttled false no limit applies, and only the counters move.
+	Every budget is a token bucket that refills by os.time. A data store request spends one of each
+	request type it draws on, and short of any it waits in a queue, and fails once MaxQueued are
+	waiting. A budget read gives this server's smallest bucket among the types the name draws on. A
+	MemoryStore request short of units, or a write past the memory quota, fails at once. With Throttled
+	false no limit applies, and only the counters move.
 
 	Queued, Conflicts, Units, UnitsByMap, Calls, Bytes and PeakBytes are counters for tests to read;
 	nothing is decided from them.
@@ -86,8 +88,8 @@ local function CheckMapName(Name: string): ()
 	end
 end
 
-local function ServerBucketId(Kind: Enum.DataStoreRequestType): string
-	return `s\0{Kind.Name}`
+local function ServerBucketId(Name: string): string
+	return `s\0{Name}`
 end
 
 local Service = {}
@@ -95,16 +97,19 @@ Service.__index = Service
 
 export type Service = setmetatable<ServiceData, typeof(Service)>
 
-local function ServerCap(Mock: Service, Kind: Enum.DataStoreRequestType): number
-	return Budget.Ceiling(Budget.AllowanceFor(Kind).Server, Mock.Players)
+local function ServerCap(Mock: Service, Name: string): number
+	return Budget.Ceiling(Budget.AllowanceOf(Name).Server, Mock.Players)
 end
 
-local function RequestBuckets(Mock: Service, Kind: Enum.DataStoreRequestType): { TokenBucket }
-	local Allowance = Budget.AllowanceFor(Kind)
-	return {
-		{ Id = ServerBucketId(Kind), Cap = Budget.Ceiling(Allowance.Server, Mock.Players) },
-		{ Id = `x\0{Kind.Name}`, Cap = Budget.Ceiling(Allowance.Experience, Mock.CCU) },
-	}
+local function RequestBuckets(Mock: Service, Kinds: { Enum.DataStoreRequestType }): { TokenBucket }
+	local Buckets: { TokenBucket } = {}
+	for _, Kind in Kinds do
+		local Name = Kind.Name
+		local Allowance = Budget.AllowanceOf(Name)
+		table.insert(Buckets, { Id = ServerBucketId(Name), Cap = Budget.Ceiling(Allowance.Server, Mock.Players) })
+		table.insert(Buckets, { Id = `x\0{Name}`, Cap = Budget.Ceiling(Allowance.Experience, Mock.CCU) })
+	end
+	return Buckets
 end
 
 local function Refill(Mock: Service, Id: string, Cap: number): number
@@ -157,13 +162,15 @@ local function WaitForBudget(Mock: Service, Buckets: { TokenBucket }, Cost: numb
 	Deduct(Mock, Buckets, Cost)
 end
 
-local function SpendRequest(Mock: Service, Kind: Enum.DataStoreRequestType): ()
-	Mock.Calls[Kind.Name] = (Mock.Calls[Kind.Name] or 0) + 1
+local function SpendRequest(Mock: Service, Kinds: { Enum.DataStoreRequestType }): ()
+	for _, Kind in Kinds do
+		Mock.Calls[Kind.Name] = (Mock.Calls[Kind.Name] or 0) + 1
+	end
 	if not Mock.Throttled then
 		return
 	end
 
-	WaitForBudget(Mock, RequestBuckets(Mock, Kind), 1)
+	WaitForBudget(Mock, RequestBuckets(Mock, Kinds), 1)
 end
 
 local function SpendKeyBytes(Mock: Service, Direction: "Read" | "Write", Store: string, Key: string, Bytes: number): ()
@@ -230,8 +237,8 @@ end
 
 local function StoreHost(Mock: Service, Name: string): DataStore.Host
 	return table.freeze({
-		SpendRequest = function(Kind: Enum.DataStoreRequestType): ()
-			SpendRequest(Mock, Kind)
+		SpendRequest = function(Kinds: { Enum.DataStoreRequestType }): ()
+			SpendRequest(Mock, Kinds)
 		end,
 		SpendKeyBytes = function(Direction: "Read" | "Write", Key: string, Bytes: number): ()
 			SpendKeyBytes(Mock, Direction, Name, Key, Bytes)
@@ -314,7 +321,11 @@ function Service.GetHashMap(self: Service, Name: string): HashMap
 end
 
 function Service.GetRequestBudgetForRequestType(self: Service, Kind: Enum.DataStoreRequestType): number
-	return math.floor(Refill(self, ServerBucketId(Kind), ServerCap(self, Kind)))
+	local Least = math.huge
+	for _, Name in Budget.DrawsOf(Kind) do
+		Least = math.min(Least, Refill(self, ServerBucketId(Name), ServerCap(self, Name)))
+	end
+	return math.floor(Least)
 end
 
 function Service.Reset(self: Service): ()

@@ -28,7 +28,7 @@ local Pages = require("./Pages")
 type Pages = Pages.Pages
 
 export type Host = {
-	read SpendRequest: (Kind: Enum.DataStoreRequestType) -> (),
+	read SpendRequest: (Kinds: { Enum.DataStoreRequestType }) -> (),
 	read SpendKeyBytes: (Direction: "Read" | "Write", Key: string, Bytes: number) -> (),
 	read CountConflict: () -> (),
 }
@@ -71,6 +71,13 @@ local ORDER_HASH = Enum.HashAlgorithm.Blake3
 local ORDER_RANGE = 2 ^ 32
 
 local CURSOR_PREFIX = "k"
+
+local READ: { Enum.DataStoreRequestType } = table.freeze({ Enum.DataStoreRequestType.StandardRead })
+local WRITE: { Enum.DataStoreRequestType } = table.freeze({ Enum.DataStoreRequestType.StandardWrite })
+local READ_AND_WRITE: { Enum.DataStoreRequestType } =
+	table.freeze({ Enum.DataStoreRequestType.StandardRead, Enum.DataStoreRequestType.StandardWrite })
+local REMOVE: { Enum.DataStoreRequestType } = table.freeze({ Enum.DataStoreRequestType.StandardRemove })
+local LIST: { Enum.DataStoreRequestType } = table.freeze({ Enum.DataStoreRequestType.StandardList })
 
 local DEFAULT_KEYS_PER_PAGE = 50
 local DEFAULT_VERSIONS_PER_PAGE = 25
@@ -221,8 +228,8 @@ DataStore.__index = DataStore
 
 export type DataStore = setmetatable<DataStoreData, typeof(DataStore)>
 
-local function SpendRequest(Store: DataStore, Kind: Enum.DataStoreRequestType): ()
-	Store.Host.SpendRequest(Kind)
+local function SpendRequest(Store: DataStore, Kinds: { Enum.DataStoreRequestType }): ()
+	Store.Host.SpendRequest(Kinds)
 	task.wait(0)
 end
 
@@ -382,7 +389,7 @@ end
 
 function DataStore.GetAsync(self: DataStore, Key: string): (any, KeyInfo?)
 	CheckKey(Key)
-	SpendRequest(self, Enum.DataStoreRequestType.GetAsync)
+	SpendRequest(self, READ)
 	return ReadLatest(self, Key)
 end
 
@@ -390,7 +397,7 @@ function DataStore.UpdateAsync(self: DataStore, Key: string, Transform: Transfor
 	CheckKey(Key)
 
 	for _ = 1, DataStoreLimits.MaxTransformRuns do
-		SpendRequest(self, Enum.DataStoreRequestType.UpdateAsync)
+		SpendRequest(self, READ_AND_WRITE)
 		local ReadVersionName = NewestVersionName(self.Records[Key])
 
 		local Current, Info = ReadLatest(self, Key)
@@ -424,13 +431,13 @@ end
 
 function DataStore.SetAsync(self: DataStore, Key: string, Value: any): string
 	CheckKey(Key)
-	SpendRequest(self, Enum.DataStoreRequestType.SetIncrementAsync)
+	SpendRequest(self, WRITE)
 	return WriteValue(self, Key, Value).Name
 end
 
 function DataStore.RemoveAsync(self: DataStore, Key: string): (any, KeyInfo?)
 	CheckKey(Key)
-	SpendRequest(self, Enum.DataStoreRequestType.SetIncrementAsync)
+	SpendRequest(self, REMOVE)
 
 	local Current, Info = ReadLatest(self, Key)
 	if Info == nil then
@@ -443,7 +450,7 @@ end
 
 function DataStore.GetVersionAsync(self: DataStore, Key: string, Version: string): (any, KeyInfo?)
 	CheckKey(Key)
-	SpendRequest(self, Enum.DataStoreRequestType.GetVersionAsync)
+	SpendRequest(self, READ)
 
 	local Record = self.Records[Key]
 	if Record ~= nil then
@@ -466,7 +473,7 @@ function DataStore.ListVersionsAsync(
 	PageSize: number?
 ): Pages
 	CheckKey(Key)
-	SpendRequest(self, Enum.DataStoreRequestType.ListAsync)
+	SpendRequest(self, LIST)
 
 	local Rows: { any } = {}
 	local Record = self.Records[Key]
@@ -503,13 +510,13 @@ function DataStore.ListKeysAsync(
 	Cursor: string?,
 	ExcludeDeleted: boolean?
 ): Pages
-	SpendRequest(self, Enum.DataStoreRequestType.ListAsync)
+	SpendRequest(self, LIST)
 
 	local Listed = ListedKeys(self, Prefix or "")
 	local From = ResumeIndexFor(Listed, Cursor)
 	local Size = PageSizeFor(PageSize, DEFAULT_KEYS_PER_PAGE)
 	local function SpendPage(): ()
-		SpendRequest(self, Enum.DataStoreRequestType.ListAsync)
+		SpendRequest(self, LIST)
 	end
 
 	if ExcludeDeleted == true then
